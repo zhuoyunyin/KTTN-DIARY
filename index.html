@@ -563,6 +563,11 @@ function getFirstDayOfMonth(year, month) {
   return d === 0 ? 6 : d - 1; // Mon=0
 }
 
+function getMondayOfMonthWeek(year, month, weekNum) {
+  const firstDay = getFirstDayOfMonth(year, month);
+  return new Date(year, month - 1, 1 - firstDay + (weekNum - 1) * 7);
+}
+
 function getEntryKey(type, year, month, day, weekNum) {
   if (type === 'day') return `day:${year}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
   if (type === 'week') return `week:${year}-${String(month).padStart(2,'0')}-W${weekNum}`;
@@ -720,7 +725,7 @@ function useDiary() { return React.useContext(DiaryContext); }
 
 Object.assign(window, {
   DiaryProvider, useDiary, DiaryContext,
-  getMonthWeekNumber, getWeekLabel, getDaysInMonth, getFirstDayOfMonth,
+  getMonthWeekNumber, getWeekLabel, getDaysInMonth, getFirstDayOfMonth, getMondayOfMonthWeek,
   getEntryKey, countWords, stripHtml, isEmptyContent, getAnniversary,
   STORAGE_KEY, DEFAULT_SETTINGS,
   getGistId, getGistToken, setGistCreds, GIST_SYNC_ENABLED,
@@ -1197,6 +1202,7 @@ function WeekNoteBanner({ year, month, weekNum, expanded: initExpanded = false }
   const { getEntries, updateEntry, deleteEntry } = useDiary();
   const key = getEntryKey('week', year, month, null, weekNum);
   const entries = getEntries(key);
+  const previewText = entries.length > 0 ? stripHtml(entries[0].content).slice(0, 30) : '';
 
   return (
     <div style={{
@@ -1211,7 +1217,7 @@ function WeekNoteBanner({ year, month, weekNum, expanded: initExpanded = false }
         <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--note-banner-text)' }}>第{weekNum}周 周记</span>
         {entries.length > 0 && !expanded && (
           <span style={{ fontSize: 11, color: 'var(--text-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, textAlign: 'left' }}>
-            {entries[0].content.slice(0, 30)}...
+            {previewText}{previewText.length >= 30 ? '...' : ''}
           </span>
         )}
         {entries.length === 0 && !expanded && <span style={{ fontSize: 11, color: 'var(--text-3)' }}>点击添加</span>}
@@ -1220,7 +1226,7 @@ function WeekNoteBanner({ year, month, weekNum, expanded: initExpanded = false }
       </button>
       {expanded && (
         <div style={{ padding: '0 12px 10px', display: 'flex', flexDirection: 'column', gap: 6 }}>
-          {entries.map(e => <EntryCard key={e.id} entry={e} compact onEdit={(id,c) => updateEntry(key,id,c)} onDelete={(id) => deleteEntry(key,id)}/>)}
+          {entries.map(e => <EntryCard key={e.id} entry={e} onEdit={(id,c) => updateEntry(key,id,c)} onDelete={(id) => deleteEntry(key,id)}/>)}
           <WriteBox entryKey={key} placeholder="写下这周的记录..."/>
         </div>
       )}
@@ -1234,6 +1240,7 @@ function MonthNoteBanner({ year, month }) {
   const { getEntries, updateEntry, deleteEntry } = useDiary();
   const key = getEntryKey('month', year, month);
   const entries = getEntries(key);
+  const previewText = entries.length > 0 ? stripHtml(entries[0].content).slice(0, 24) : '';
 
   return (
     <div style={{
@@ -1248,7 +1255,7 @@ function MonthNoteBanner({ year, month }) {
         <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--note-banner-text)' }}>{month}月 月记</span>
         {entries.length > 0 && !expanded && (
           <span style={{ fontSize: 11, color: 'var(--text-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, textAlign: 'left' }}>
-            {entries[0].content.slice(0, 24)}...
+            {previewText}{previewText.length >= 24 ? '...' : ''}
           </span>
         )}
         <AuthorDots entries={entries} size={4}/>
@@ -1256,7 +1263,7 @@ function MonthNoteBanner({ year, month }) {
       </button>
       {expanded && (
         <div style={{ padding: '0 12px 10px', display: 'flex', flexDirection: 'column', gap: 6 }}>
-          {entries.map(e => <EntryCard key={e.id} entry={e} compact onEdit={(id,c) => updateEntry(key,id,c)} onDelete={(id) => deleteEntry(key,id)}/>)}
+          {entries.map(e => <EntryCard key={e.id} entry={e} onEdit={(id,c) => updateEntry(key,id,c)} onDelete={(id) => deleteEntry(key,id)}/>)}
           <WriteBox entryKey={key} placeholder="写下这个月的总结..."/>
         </div>
       )}
@@ -2104,69 +2111,71 @@ function WeekDayEntries({ dayEntries, settings }) {
   );
 }
 
-function WeekView({ year, month, day }) {
+function WeekGrid({ year, month, weekNum, monday }) {
   const { settings, entries } = useDiary();
-  const weekNum = getMonthWeekNumber(year, month, day || 1);
-  
-  const refDate = new Date(year, month - 1, day || 1);
-  const dow = (refDate.getDay() + 6) % 7;
-  const monday = new Date(refDate);
-  monday.setDate(monday.getDate() - dow);
-  
+  const today = new Date();
+  today.setHours(0,0,0,0);
+
   const weekDays = Array.from({ length: 7 }, (_, i) => {
     const d = new Date(monday);
     d.setDate(d.getDate() + i);
     return d;
   });
 
-  const today = new Date();
-  today.setHours(0,0,0,0);
+  return (
+    <div className="week-grid">
+      {weekDays.map((d, i) => {
+        const m = d.getMonth() + 1;
+        const dy = d.getDate();
+        const yr = d.getFullYear();
+        const isToday = d.getTime() === today.getTime();
+        const key = getEntryKey('day', yr, m, dy);
+        const dayEntries = entries[key] || [];
+        const anniversary = getAnniversary(settings, m, dy);
+
+        return (
+          <div key={i} className={`week-day-col ${isToday ? 'today' : ''}`}>
+            <div className="week-day-header">
+              <span className="week-day-name">{WEEKDAYS_ZH[i]}</span>
+              <span className={`week-day-num ${isToday ? 'today' : ''}`}>{m}/{dy}</span>
+              {anniversary && <span style={{ fontSize: 10, color: 'var(--month-note-text)' }}>·</span>}
+            </div>
+            <div className="week-day-entries">
+              <WeekDayEntries dayEntries={dayEntries} settings={settings}/>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function WeekView({ year, month, day }) {
+  const { settings } = useDiary();
+  const weekNum = getMonthWeekNumber(year, month, day || 1);
+
+  const refDate = new Date(year, month - 1, day || 1);
+  const dow = (refDate.getDay() + 6) % 7;
+  const monday = new Date(refDate);
+  monday.setDate(monday.getDate() - dow);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       <WeekNoteBanner year={year} month={month} weekNum={weekNum} expanded/>
 
-      <div className="week-grid">
-        {weekDays.map((d, i) => {
-          const m = d.getMonth() + 1;
-          const dy = d.getDate();
-          const yr = d.getFullYear();
-          const isToday = d.getTime() === today.getTime();
-          const key = getEntryKey('day', yr, m, dy);
-          const dayEntries = entries[key] || [];
-          const anniversary = getAnniversary(settings, m, dy);
-
-          return (
-            <div key={i} className={`week-day-col ${isToday ? 'today' : ''}`}>
-              <div className="week-day-header">
-                <span className="week-day-name">{WEEKDAYS_ZH[i]}</span>
-                <span className={`week-day-num ${isToday ? 'today' : ''}`}>{m}/{dy}</span>
-                {anniversary && <span style={{ fontSize: 10, color: 'var(--month-note-text)' }}>·</span>}
-              </div>
-              <div className="week-day-entries">
-                <WeekDayEntries dayEntries={dayEntries} settings={settings}/>
-              </div>
-            </div>
-          );
-        })}
-      </div>
+      <WeekGrid year={year} month={month} weekNum={weekNum} monday={monday}/>
 
       <div className="section-divider"><span>往年 第{weekNum}周</span></div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
         {settings.years.filter(y => y !== year).reverse().map(y => {
-          const wkey = getEntryKey('week', y, month, null, weekNum);
-          const wentries = entries[wkey] || [];
+          const pastMonday = getMondayOfMonthWeek(y, month, weekNum);
           return (
-            <div key={y} style={{
-              padding: '8px 12px', borderRadius: 10,
-              background: 'var(--surface-2)', border: '1px solid var(--border-light)',
-            }}>
+            <div key={y} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-2)' }}>{y}</span>
-                <AuthorDots entries={wentries} size={4}/>
-                {wentries.length === 0 && <span style={{ fontSize: 11, color: 'var(--text-3)' }}>无周记</span>}
+                <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-2)' }}>{y} · {month}月 第{weekNum}周</span>
               </div>
-              {wentries.map(e => <EntryCard key={e.id} entry={e} compact/>)}
+              <WeekNoteBanner year={y} month={month} weekNum={weekNum}/>
+              <WeekGrid year={y} month={month} weekNum={weekNum} monday={pastMonday}/>
             </div>
           );
         })}
@@ -2175,13 +2184,13 @@ function WeekView({ year, month, day }) {
   );
 }
 
-Object.assign(window, { WeekView, WeekDayEntries });
+Object.assign(window, { WeekView, WeekDayEntries, WeekGrid });
 
 /* ===== diary/year-view.jsx ===== */
 // ═══ Year View ═══
 
 function YearView({ year }) {
-  const { settings, entries, getEntries } = useDiary();
+  const { settings, entries, getEntries, updateEntry, deleteEntry } = useDiary();
   const today = new Date();
 
   // Year note
@@ -2207,7 +2216,11 @@ function YearView({ year }) {
         </button>
         {yearNoteOpen && (
           <div style={{ padding: '0 14px 12px', display: 'flex', flexDirection: 'column', gap: 6 }}>
-            {yearEntries.map(e => <EntryCard key={e.id} entry={e} compact/>)}
+            {yearEntries.map(e => (
+              <EntryCard key={e.id} entry={e}
+                onEdit={(id, c) => updateEntry(yearKey, id, c)}
+                onDelete={(id) => deleteEntry(yearKey, id)}/>
+            ))}
             <WriteBox entryKey={yearKey} placeholder={`写下${year}年的年记...`}/>
           </div>
         )}
@@ -2296,25 +2309,28 @@ function YearView({ year }) {
       {/* Year management */}
       <div style={{
         display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'center',
-        padding: '12px 0',
+        padding: '12px 0', flexWrap: 'wrap',
       }}>
         <span style={{ fontSize: 12, color: 'var(--text-3)' }}>年份：</span>
         {settings.years.map(y => (
-          <span key={y} style={{
-            padding: '3px 10px', borderRadius: 8, fontSize: 12,
-            background: y === year ? 'var(--accent)' : 'var(--surface-2)',
-            color: y === year ? '#fff' : 'var(--text-2)',
-            cursor: 'pointer', fontWeight: y === year ? 600 : 400,
-          }}
+          <button key={y}
+            type="button"
             onClick={() => { if (window.__navRef) window.__navRef.setYear(y); }}
-          >{y}</span>
+            style={{
+              padding: '5px 14px', borderRadius: 8, fontSize: 12,
+              background: y === year ? 'var(--accent)' : 'var(--surface-2)',
+              color: y === year ? '#fff' : 'var(--text-2)',
+              border: 'none', cursor: 'pointer', fontWeight: y === year ? 600 : 400,
+              fontFamily: 'inherit',
+            }}
+          >{y}</button>
         ))}
         <button onClick={() => {
           const next = Math.max(...settings.years) + 1;
           const { addYear } = window.__diaryRef;
           addYear(next);
         }} style={{
-          padding: '3px 10px', borderRadius: 8, fontSize: 12,
+          padding: '5px 14px', borderRadius: 8, fontSize: 12,
           background: 'none', border: '1px dashed var(--accent)',
           color: 'var(--accent)', cursor: 'pointer', fontFamily: 'inherit',
         }}>+ {Math.max(...settings.years) + 1}</button>
@@ -2382,7 +2398,9 @@ function App() {
   }, []);
 
   const navigate = (dir) => {
-    if (view === 'month' || view === 'year') {
+    if (view === 'year') {
+      setYear(year + dir);
+    } else if (view === 'month') {
       let m = month + dir, y = year;
       if (m > 12) { m = 1; y++; } if (m < 1) { m = 12; y--; }
       setMonth(m); setYear(y);
