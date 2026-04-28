@@ -663,6 +663,25 @@ function DiaryProvider({ children }) {
     });
   }, []);
 
+  const togglePinEntry = React.useCallback((key, entryId) => {
+    setData(prev => {
+      const list = prev.entries[key];
+      if (!list) return prev;
+      const target = list.find(e => e.id === entryId);
+      if (!target) return prev;
+      if (!target.pinned) {
+        const pinnedCount = list.filter(e => e.pinned).length;
+        if (pinnedCount >= 3) {
+          if (typeof window !== 'undefined') window.alert('每天最多只能置顶 3 条');
+          return prev;
+        }
+      }
+      const next = { ...prev, entries: { ...prev.entries } };
+      next.entries[key] = list.map(e => e.id === entryId ? { ...e, pinned: !e.pinned } : e);
+      return next;
+    });
+  }, []);
+
   const updateSettings = React.useCallback((patch) => {
     setData(prev => ({ ...prev, settings: { ...prev.settings, ...patch } }));
   }, []);
@@ -690,9 +709,9 @@ function DiaryProvider({ children }) {
 
   const value = React.useMemo(() => ({
     data, settings: data.settings, entries: data.entries,
-    addEntry, updateEntry, deleteEntry, updateSettings, addYear,
+    addEntry, updateEntry, deleteEntry, togglePinEntry, updateSettings, addYear,
     getEntries, doExport, doImport, syncStatus,
-  }), [data, addEntry, updateEntry, deleteEntry, updateSettings, addYear, getEntries, doExport, doImport, syncStatus]);
+  }), [data, addEntry, updateEntry, deleteEntry, togglePinEntry, updateSettings, addYear, getEntries, doExport, doImport, syncStatus]);
 
   return <DiaryContext.Provider value={value}>{children}</DiaryContext.Provider>;
 }
@@ -707,7 +726,6 @@ Object.assign(window, {
   getGistId, getGistToken, setGistCreds, GIST_SYNC_ENABLED,
   GIST_ID_KEY, GIST_TOKEN_KEY, GIST_SKIP_KEY, GIST_FILENAME,
 });
-
 
 /* ===== diary/components.jsx ===== */
 // ═══ Shared UI Components ═══
@@ -878,7 +896,7 @@ function AuthorDots({ entries, size = 5 }) {
 }
 
 // ── Entry Card ──
-function EntryCard({ entry, compact = false, onEdit, onDelete }) {
+function EntryCard({ entry, compact = false, onEdit, onDelete, onTogglePin }) {
   const { settings } = useDiary();
   const author = settings.authors.find(a => a.id === entry.author);
   const words = countWords(entry.content);
@@ -892,6 +910,7 @@ function EntryCard({ entry, compact = false, onEdit, onDelete }) {
         <span style={{ width: 3, minHeight: 16, borderRadius: 2, background: author?.color, flexShrink: 0, marginTop: 2 }}/>
         <div style={{ flex: 1, minWidth: 0 }}>
           <span style={{ fontSize: 12, color: author?.color, fontWeight: 600 }}>{author?.name}</span>
+          {entry.pinned && <span style={{ fontSize: 10, marginLeft: 4 }} title="已置顶">📌</span>}
           <span style={{ fontSize: 11, color: 'var(--text-3)', marginLeft: 6 }}>{words}字</span>
           <div style={{ fontSize: 13, color: 'var(--text-1)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
             {stripHtml(entry.content).slice(0, 80)}
@@ -903,13 +922,22 @@ function EntryCard({ entry, compact = false, onEdit, onDelete }) {
 
   return (
     <div style={{
-      background: `${author?.color}0a`, border: `1px solid ${author?.color}25`,
+      background: `${author?.color}0a`, border: `1px solid ${entry.pinned ? author?.color + '60' : author?.color + '25'}`,
       borderRadius: 10, padding: '12px 14px', transition: 'all 0.2s',
+      boxShadow: entry.pinned ? `0 0 0 1px ${author?.color}30` : 'none',
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
         <span style={{ width: 8, height: 8, borderRadius: '50%', background: author?.color }}/>
         <span style={{ fontSize: 13, fontWeight: 600, color: author?.color }}>{author?.name}</span>
+        {entry.pinned && <span style={{ fontSize: 11, color: 'var(--accent-text)', fontWeight: 600 }} title="已置顶">📌</span>}
         <span style={{ fontSize: 11, color: 'var(--text-3)', marginLeft: 'auto' }}>{time} · {words}字</span>
+        {onTogglePin && !editing && (
+          <button onClick={() => onTogglePin(entry.id)} title={entry.pinned ? '取消置顶' : '置顶（每天最多 3 条）'} style={{
+            background: entry.pinned ? 'var(--accent-soft)' : 'none', border: 'none', cursor: 'pointer', fontSize: 11,
+            color: entry.pinned ? 'var(--accent-text)' : 'var(--text-3)',
+            padding: '2px 6px', borderRadius: 4, fontFamily: 'inherit', fontWeight: entry.pinned ? 600 : 400,
+          }}>{entry.pinned ? '已置顶' : '置顶'}</button>
+        )}
         {onEdit && (
           <button onClick={() => { setEditing(!editing); setEditText(entry.content); }} style={{
             background: 'none', border: 'none', cursor: 'pointer', fontSize: 11, color: 'var(--text-3)',
@@ -1002,9 +1030,65 @@ function WriteBox({ entryKey, onSubmit, placeholder = '写点什么...' }) {
   );
 }
 
+// ── Year Accordion Item (single year-day card) ──
+function YearAccordionItem({ year, month, day, isCurrentYear, isOpen, onToggle }) {
+  const { getEntries, updateEntry, deleteEntry, togglePinEntry } = useDiary();
+  const key = getEntryKey('day', year, month, day);
+  const yearEntries = getEntries(key);
+  const [showAll, setShowAll] = React.useState(false);
+  const pinned = yearEntries.filter(e => e.pinned);
+  const unpinned = yearEntries.filter(e => !e.pinned);
+  const visible = showAll ? yearEntries : pinned;
+
+  return (
+    <div style={{
+      background: isOpen ? 'var(--bg-card)' : 'var(--surface-2)',
+      border: `1px solid ${isOpen ? 'var(--border)' : 'var(--border-light)'}`,
+      borderRadius: 10, overflow: 'hidden', transition: 'all 0.2s',
+    }}>
+      <button onClick={onToggle} style={{
+        width: '100%', display: 'flex', alignItems: 'center', gap: 8,
+        padding: '10px 14px', background: 'none', border: 'none',
+        cursor: 'pointer', fontFamily: 'inherit',
+      }}>
+        <span style={{ fontSize: 15, fontWeight: 700, color: isCurrentYear ? 'var(--accent)' : 'var(--text-1)' }}>{year}</span>
+        {pinned.length > 0 && <span style={{ fontSize: 11, color: 'var(--accent-text)' }}>📌{pinned.length}</span>}
+        {yearEntries.length > 0 && <AuthorDots entries={yearEntries} size={5}/>}
+        {yearEntries.length === 0 && <span style={{ fontSize: 11, color: 'var(--text-3)' }}>无记录</span>}
+        <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--text-3)', transition: 'transform 0.2s', transform: isOpen ? 'rotate(0)' : 'rotate(-90deg)' }}>▾</span>
+      </button>
+      {isOpen && (
+        <div style={{ padding: '0 14px 12px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {yearEntries.length === 0 && (
+            <div style={{ fontSize: 13, color: 'var(--text-3)', textAlign: 'center', padding: '8px 0' }}>— 这天没有记录 —</div>
+          )}
+          {visible.map(entry => (
+            <EntryCard key={entry.id} entry={entry}
+              onEdit={(id, content) => updateEntry(key, id, content)}
+              onDelete={(id) => deleteEntry(key, id)}
+              onTogglePin={(id) => togglePinEntry(key, id)}/>
+          ))}
+          {unpinned.length > 0 && (
+            <button onClick={() => setShowAll(s => !s)} style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+              padding: '6px 10px', borderRadius: 8, fontSize: 12, color: 'var(--text-2)',
+              background: 'var(--surface-2)', border: '1px dashed var(--border)',
+              cursor: 'pointer', fontFamily: 'inherit',
+            }}>
+              <span>{showAll ? `收起其他 ${unpinned.length} 条` : (pinned.length > 0 ? `展开其他 ${unpinned.length} 条` : `展开 ${unpinned.length} 条`)}</span>
+              <span style={{ transition: 'transform 0.2s', transform: showAll ? 'rotate(180deg)' : 'rotate(0)' }}>▾</span>
+            </button>
+          )}
+          <WriteBox entryKey={key} placeholder={`写下${year}年的记忆...`}/>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Year Accordion (for day view - same day across years) ──
 function YearAccordion({ month, day }) {
-  const { settings, entries, getEntries, updateEntry, deleteEntry } = useDiary();
+  const { settings } = useDiary();
   const [openYears, setOpenYears] = React.useState(() => new Set([Math.max(...settings.years)]));
 
   const toggle = (y) => {
@@ -1013,50 +1097,78 @@ function YearAccordion({ month, day }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-      {[...settings.years].reverse().map(year => {
-        const key = getEntryKey('day', year, month, day);
-        const yearEntries = getEntries(key);
-        const isOpen = openYears.has(year);
-        const isCurrentYear = year === new Date().getFullYear();
+      {[...settings.years].reverse().map(year => (
+        <YearAccordionItem key={year} year={year} month={month} day={day}
+          isCurrentYear={year === new Date().getFullYear()}
+          isOpen={openYears.has(year)}
+          onToggle={() => toggle(year)}/>
+      ))}
+    </div>
+  );
+}
 
-        return (
-          <div key={year} style={{
-            background: isOpen ? 'var(--bg-card)' : 'var(--surface-2)',
-            border: `1px solid ${isOpen ? 'var(--border)' : 'var(--border-light)'}`,
-            borderRadius: 10, overflow: 'hidden', transition: 'all 0.2s',
-          }}>
-            <button onClick={() => toggle(year)} style={{
-              width: '100%', display: 'flex', alignItems: 'center', gap: 8,
-              padding: '10px 14px', background: 'none', border: 'none',
+// ── Month Accordion Item (single month-day card) ──
+function MonthAccordionItem({ y, m, day, isCurrent }) {
+  const { getEntries, updateEntry, deleteEntry, togglePinEntry } = useDiary();
+  const key = getEntryKey('day', y, m, day);
+  const monthEntries = getEntries(key);
+  const [open, setOpen] = React.useState(isCurrent);
+  const [showAll, setShowAll] = React.useState(false);
+  const pinned = monthEntries.filter(e => e.pinned);
+  const unpinned = monthEntries.filter(e => !e.pinned);
+  const visible = showAll ? monthEntries : pinned;
+
+  return (
+    <div style={{
+      background: open ? 'var(--bg-card)' : 'var(--surface-2)',
+      border: `1px solid ${open ? 'var(--border)' : 'var(--border-light)'}`,
+      borderRadius: 10, overflow: 'hidden', transition: 'all 0.2s',
+    }}>
+      <button onClick={() => setOpen(!open)} style={{
+        width: '100%', display: 'flex', alignItems: 'center', gap: 8,
+        padding: '10px 14px', background: 'none', border: 'none',
+        cursor: 'pointer', fontFamily: 'inherit',
+      }}>
+        <span style={{ fontSize: 14, fontWeight: 600, color: isCurrent ? 'var(--accent)' : 'var(--text-1)' }}>
+          {y}年{m}月{day}日
+        </span>
+        {isCurrent && <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 4, background: 'var(--accent-soft)', color: 'var(--accent-text)', fontWeight: 600 }}>本月</span>}
+        {pinned.length > 0 && <span style={{ fontSize: 11, color: 'var(--accent-text)' }}>📌{pinned.length}</span>}
+        {monthEntries.length > 0 && <AuthorDots entries={monthEntries} size={5}/>}
+        {monthEntries.length === 0 && <span style={{ fontSize: 11, color: 'var(--text-3)' }}>无记录</span>}
+        <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--text-3)', transition: 'transform 0.2s', transform: open ? 'rotate(0)' : 'rotate(-90deg)' }}>▾</span>
+      </button>
+      {open && (
+        <div style={{ padding: '0 14px 12px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {monthEntries.length === 0 && (
+            <div style={{ fontSize: 13, color: 'var(--text-3)', textAlign: 'center', padding: '8px 0' }}>— 这天没有记录 —</div>
+          )}
+          {visible.map(entry => (
+            <EntryCard key={entry.id} entry={entry}
+              onEdit={(id, content) => updateEntry(key, id, content)}
+              onDelete={(id) => deleteEntry(key, id)}
+              onTogglePin={(id) => togglePinEntry(key, id)}/>
+          ))}
+          {unpinned.length > 0 && (
+            <button onClick={() => setShowAll(s => !s)} style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+              padding: '6px 10px', borderRadius: 8, fontSize: 12, color: 'var(--text-2)',
+              background: 'var(--surface-2)', border: '1px dashed var(--border)',
               cursor: 'pointer', fontFamily: 'inherit',
             }}>
-              <span style={{ fontSize: 15, fontWeight: 700, color: isCurrentYear ? 'var(--accent)' : 'var(--text-1)' }}>{year}</span>
-              {yearEntries.length > 0 && <AuthorDots entries={yearEntries} size={5}/>}
-              {yearEntries.length === 0 && <span style={{ fontSize: 11, color: 'var(--text-3)' }}>无记录</span>}
-              <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--text-3)', transition: 'transform 0.2s', transform: isOpen ? 'rotate(0)' : 'rotate(-90deg)' }}>▾</span>
+              <span>{showAll ? `收起其他 ${unpinned.length} 条` : (pinned.length > 0 ? `展开其他 ${unpinned.length} 条` : `展开 ${unpinned.length} 条`)}</span>
+              <span style={{ transition: 'transform 0.2s', transform: showAll ? 'rotate(180deg)' : 'rotate(0)' }}>▾</span>
             </button>
-            {isOpen && (
-              <div style={{ padding: '0 14px 12px', display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {yearEntries.length > 0 ? yearEntries.map(entry => (
-                  <EntryCard key={entry.id} entry={entry}
-                    onEdit={(id, content) => updateEntry(key, id, content)}
-                    onDelete={(id) => deleteEntry(key, id)}/>
-                )) : (
-                  <div style={{ fontSize: 13, color: 'var(--text-3)', textAlign: 'center', padding: '8px 0' }}>— 这天没有记录 —</div>
-                )}
-                <WriteBox entryKey={key} placeholder={`写下${year}年的记忆...`}/>
-              </div>
-            )}
-          </div>
-        );
-      })}
+          )}
+          <WriteBox entryKey={key} placeholder={`写下记忆...`}/>
+        </div>
+      )}
     </div>
   );
 }
 
 // ── Month Accordion (same day across months - for month view) ──
 function MonthAccordion({ year, day, currentMonth }) {
-  const { entries, getEntries, updateEntry, deleteEntry } = useDiary();
   // Show last 6 months (including current)
   const months = [];
   for (let i = 0; i < 6; i++) {
@@ -1072,46 +1184,9 @@ function MonthAccordion({ year, day, currentMonth }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-      {months.map(({ year: y, month: m }, idx) => {
-        const key = getEntryKey('day', y, m, day);
-        const monthEntries = getEntries(key);
-        const isCurrent = idx === 0;
-        const [open, setOpen] = React.useState(isCurrent);
-
-        return (
-          <div key={`${y}-${m}`} style={{
-            background: open ? 'var(--bg-card)' : 'var(--surface-2)',
-            border: `1px solid ${open ? 'var(--border)' : 'var(--border-light)'}`,
-            borderRadius: 10, overflow: 'hidden', transition: 'all 0.2s',
-          }}>
-            <button onClick={() => setOpen(!open)} style={{
-              width: '100%', display: 'flex', alignItems: 'center', gap: 8,
-              padding: '10px 14px', background: 'none', border: 'none',
-              cursor: 'pointer', fontFamily: 'inherit',
-            }}>
-              <span style={{ fontSize: 14, fontWeight: 600, color: isCurrent ? 'var(--accent)' : 'var(--text-1)' }}>
-                {y}年{m}月{day}日
-              </span>
-              {isCurrent && <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 4, background: 'var(--accent-soft)', color: 'var(--accent-text)', fontWeight: 600 }}>本月</span>}
-              {monthEntries.length > 0 && <AuthorDots entries={monthEntries} size={5}/>}
-              {monthEntries.length === 0 && <span style={{ fontSize: 11, color: 'var(--text-3)' }}>无记录</span>}
-              <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--text-3)', transition: 'transform 0.2s', transform: open ? 'rotate(0)' : 'rotate(-90deg)' }}>▾</span>
-            </button>
-            {open && (
-              <div style={{ padding: '0 14px 12px', display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {monthEntries.length > 0 ? monthEntries.map(entry => (
-                  <EntryCard key={entry.id} entry={entry}
-                    onEdit={(id, content) => updateEntry(key, id, content)}
-                    onDelete={(id) => deleteEntry(key, id)}/>
-                )) : (
-                  <div style={{ fontSize: 13, color: 'var(--text-3)', textAlign: 'center', padding: '8px 0' }}>— 这天没有记录 —</div>
-                )}
-                <WriteBox entryKey={key} placeholder={`写下记忆...`}/>
-              </div>
-            )}
-          </div>
-        );
-      })}
+      {months.map(({ year: y, month: m }, idx) => (
+        <MonthAccordionItem key={`${y}-${m}`} y={y} m={m} day={day} isCurrent={idx === 0}/>
+      ))}
     </div>
   );
 }
@@ -1646,11 +1721,11 @@ function SettingsView() {
 
 Object.assign(window, {
   AuthorBadge, AuthorDots, EntryCard, WriteBox, RichEditor, RichContent, SettingsView,
-  YearAccordion, MonthAccordion, WeekNoteBanner, MonthNoteBanner, NavHeader, SearchModal,
+  YearAccordion, YearAccordionItem, MonthAccordion, MonthAccordionItem,
+  WeekNoteBanner, MonthNoteBanner, NavHeader, SearchModal,
   GistSetupModal,
   WEEKDAYS_ZH, MONTHS_ZH, navBtnStyle,
 });
-
 
 /* ===== diary/month-view.jsx ===== */
 // ═══ Month View ═══
@@ -1811,9 +1886,56 @@ function MonthView({ year, month }) {
 
 Object.assign(window, { MonthView });
 
-
 /* ===== diary/day-view.jsx ===== */
 // ═══ Day View ═══
+
+function DayAuthorColumn({ authorId, authorEntries, currentKey }) {
+  const { settings, updateEntry, deleteEntry, togglePinEntry } = useDiary();
+  const author = settings.authors.find(a => a.id === authorId);
+  const wordCount = authorEntries.reduce((s, e) => s + countWords(e.content), 0);
+  const pinned = authorEntries.filter(e => e.pinned);
+  const unpinned = authorEntries.filter(e => !e.pinned);
+  const [showAll, setShowAll] = React.useState(false);
+
+  const renderEntry = (entry) => (
+    <EntryCard key={entry.id} entry={entry}
+      onEdit={(id, content) => updateEntry(currentKey, id, content)}
+      onDelete={(id) => deleteEntry(currentKey, id)}
+      onTogglePin={(id) => togglePinEntry(currentKey, id)}/>
+  );
+
+  return (
+    <div className="day-column" style={{ borderColor: `${author.color}30` }}>
+      <div className="day-column-header">
+        <span style={{ width: 10, height: 10, borderRadius: '50%', background: author.color }}/>
+        <span style={{ fontSize: 14, fontWeight: 600, color: author.color }}>{author.name}</span>
+        <span style={{ fontSize: 11, color: 'var(--text-3)', marginLeft: 'auto' }}>
+          {pinned.length > 0 && <span style={{ color: 'var(--accent-text)', marginRight: 6 }}>📌{pinned.length}</span>}
+          {wordCount}字
+        </span>
+      </div>
+      <div className="day-column-body">
+        {authorEntries.length === 0 && (
+          <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-3)', fontSize: 13 }}>暂无记录</div>
+        )}
+        {pinned.map(renderEntry)}
+        {unpinned.length > 0 && (
+          <button onClick={() => setShowAll(s => !s)} style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+            padding: '6px 10px', borderRadius: 8, fontSize: 12, color: 'var(--text-2)',
+            background: 'var(--surface-2)', border: '1px dashed var(--border)',
+            cursor: 'pointer', fontFamily: 'inherit',
+          }}>
+            <span>{showAll ? `收起其他 ${unpinned.length} 条` : `展开其他 ${unpinned.length} 条`}</span>
+            <span style={{ transition: 'transform 0.2s', transform: showAll ? 'rotate(180deg)' : 'rotate(0)' }}>▾</span>
+          </button>
+        )}
+        {showAll && unpinned.map(renderEntry)}
+        <WriteBox entryKey={currentKey} placeholder={`以${author.name}的身份写...`}/>
+      </div>
+    </div>
+  );
+}
 
 function DayView({ year, month, day, onBack }) {
   const { settings, entries } = useDiary();
@@ -1827,32 +1949,6 @@ function DayView({ year, month, day, onBack }) {
   const humanEntries = currentEntries.filter(e => e.author === 'human');
   const llmEntries = currentEntries.filter(e => e.author === 'llm');
   const [mobileTab, setMobileTab] = React.useState('human');
-  const humanWords = humanEntries.reduce((s, e) => s + countWords(e.content), 0);
-  const llmWords = llmEntries.reduce((s, e) => s + countWords(e.content), 0);
-
-  const renderColumn = (authorId, authorEntries, wordCount) => {
-    const author = settings.authors.find(a => a.id === authorId);
-    const key = currentKey;
-    return (
-      <div className="day-column" style={{ borderColor: `${author.color}30` }}>
-        <div className="day-column-header">
-          <span style={{ width: 10, height: 10, borderRadius: '50%', background: author.color }}/>
-          <span style={{ fontSize: 14, fontWeight: 600, color: author.color }}>{author.name}</span>
-          <span style={{ fontSize: 11, color: 'var(--text-3)', marginLeft: 'auto' }}>{wordCount}字</span>
-        </div>
-        <div className="day-column-body">
-          {authorEntries.length > 0 ? authorEntries.map(entry => (
-            <EntryCard key={entry.id} entry={entry}
-              onEdit={(id, content) => { window.__diaryRef?.updateEntry(key, id, content); }}
-              onDelete={(id) => { window.__diaryRef?.deleteEntry(key, id); }}/>
-          )) : (
-            <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-3)', fontSize: 13 }}>暂无记录</div>
-          )}
-          <WriteBox entryKey={key} placeholder={`以${author.name}的身份写...`}/>
-        </div>
-      </div>
-    );
-  };
 
   return (
     <div className="day-view">
@@ -1882,8 +1978,8 @@ function DayView({ year, month, day, onBack }) {
       </div>
 
       <div className="day-columns-desktop">
-        {renderColumn('human', humanEntries, humanWords)}
-        {renderColumn('llm', llmEntries, llmWords)}
+        <DayAuthorColumn authorId="human" authorEntries={humanEntries} currentKey={currentKey}/>
+        <DayAuthorColumn authorId="llm" authorEntries={llmEntries} currentKey={currentKey}/>
       </div>
 
       <div className="day-columns-mobile">
@@ -1895,8 +1991,8 @@ function DayView({ year, month, day, onBack }) {
             </button>
           ))}
         </div>
-        {mobileTab === 'human' && renderColumn('human', humanEntries, humanWords)}
-        {mobileTab === 'llm' && renderColumn('llm', llmEntries, llmWords)}
+        {mobileTab === 'human' && <DayAuthorColumn authorId="human" authorEntries={humanEntries} currentKey={currentKey}/>}
+        {mobileTab === 'llm' && <DayAuthorColumn authorId="llm" authorEntries={llmEntries} currentKey={currentKey}/>}
       </div>
 
       <div className="previous-years-section">
@@ -1905,14 +2001,7 @@ function DayView({ year, month, day, onBack }) {
           const k = getEntryKey('day', y, month, day);
           const yEntries = entries[k] || [];
           return (
-            <div key={y} className="prev-year-card">
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: yEntries.length > 0 ? 8 : 0 }}>
-                <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-2)' }}>{y}</span>
-                <AuthorDots entries={yEntries} size={5}/>
-                {yEntries.length === 0 && <span style={{ fontSize: 12, color: 'var(--text-3)' }}>无记录</span>}
-              </div>
-              {yEntries.map(e => <EntryCard key={e.id} entry={e} compact/>)}
-            </div>
+            <PrevYearDayCard key={y} year={y} entries={yEntries}/>
           );
         })}
       </div>
@@ -1920,11 +2009,100 @@ function DayView({ year, month, day, onBack }) {
   );
 }
 
-Object.assign(window, { DayView });
+function PrevYearDayCard({ year, entries }) {
+  const pinned = entries.filter(e => e.pinned);
+  const unpinned = entries.filter(e => !e.pinned);
+  const [showAll, setShowAll] = React.useState(false);
+  const visible = showAll ? entries : (pinned.length > 0 ? pinned : []);
 
+  return (
+    <div className="prev-year-card">
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: entries.length > 0 ? 8 : 0 }}>
+        <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-2)' }}>{year}</span>
+        <AuthorDots entries={entries} size={5}/>
+        {entries.length === 0 && <span style={{ fontSize: 12, color: 'var(--text-3)' }}>无记录</span>}
+        {entries.length > 0 && (pinned.length > 0 || unpinned.length > 0) && (
+          <button onClick={() => setShowAll(s => !s)} style={{
+            marginLeft: 'auto', background: 'none', border: '1px solid var(--border-light)',
+            borderRadius: 6, padding: '2px 8px', fontSize: 11, color: 'var(--text-3)',
+            cursor: 'pointer', fontFamily: 'inherit',
+          }}>
+            {showAll ? '收起' : (pinned.length > 0 ? `展开全部 (${entries.length})` : `展开 ${entries.length} 条`)}
+          </button>
+        )}
+      </div>
+      {visible.map(e => <EntryCard key={e.id} entry={e} compact/>)}
+      {!showAll && pinned.length === 0 && unpinned.length > 0 && (
+        <div style={{ fontSize: 11, color: 'var(--text-3)', padding: '4px 0' }}>
+          {unpinned.length} 条记录已折叠
+        </div>
+      )}
+    </div>
+  );
+}
+
+Object.assign(window, { DayView, DayAuthorColumn, PrevYearDayCard });
 
 /* ===== diary/week-view.jsx ===== */
 // ═══ Week View ═══
+
+function WeekDayEntries({ dayEntries, settings }) {
+  const pinned = dayEntries.filter(e => e.pinned);
+  const unpinned = dayEntries.filter(e => !e.pinned);
+  const [showAll, setShowAll] = React.useState(false);
+  const visible = showAll ? dayEntries : pinned;
+
+  const renderEntry = (entry) => {
+    const author = settings.authors.find(a => a.id === entry.author);
+    return (
+      <div key={entry.id} className="week-entry-card" style={{
+        background: `${author?.color}0a`, borderLeft: `3px solid ${author?.color}`,
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 4 }}>
+          <span style={{ width: 5, height: 5, borderRadius: '50%', background: author?.color }}/>
+          <span style={{ fontSize: 10, color: author?.color, fontWeight: 600 }}>{author?.name}</span>
+          {entry.pinned && <span style={{ fontSize: 9 }} title="已置顶">📌</span>}
+        </div>
+        <div style={{
+          fontSize: 12, lineHeight: 1.5, color: 'var(--text-1)',
+          overflow: 'hidden', textOverflow: 'ellipsis',
+          display: '-webkit-box', WebkitLineClamp: 4, WebkitBoxOrient: 'vertical',
+        }}>{stripHtml(entry.content)}</div>
+      </div>
+    );
+  };
+
+  if (dayEntries.length === 0) {
+    return <div style={{ fontSize: 11, color: 'var(--text-3)', textAlign: 'center', padding: '12px 4px' }}>—</div>;
+  }
+
+  return (
+    <>
+      {visible.map(renderEntry)}
+      {!showAll && pinned.length === 0 && unpinned.length > 0 && (
+        <button onClick={() => setShowAll(true)} style={{
+          width: '100%', fontSize: 10, color: 'var(--text-3)', padding: '4px 6px',
+          background: 'var(--surface-2)', border: '1px dashed var(--border-light)',
+          borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit',
+        }}>展开 {unpinned.length} 条 ▾</button>
+      )}
+      {!showAll && pinned.length > 0 && unpinned.length > 0 && (
+        <button onClick={() => setShowAll(true)} style={{
+          width: '100%', fontSize: 10, color: 'var(--text-3)', padding: '3px 6px',
+          background: 'none', border: '1px dashed var(--border-light)',
+          borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit',
+        }}>+{unpinned.length} ▾</button>
+      )}
+      {showAll && unpinned.length > 0 && (
+        <button onClick={() => setShowAll(false)} style={{
+          width: '100%', fontSize: 10, color: 'var(--text-3)', padding: '3px 6px',
+          background: 'none', border: '1px dashed var(--border-light)',
+          borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit',
+        }}>收起 ▴</button>
+      )}
+    </>
+  );
+}
 
 function WeekView({ year, month, day }) {
   const { settings, entries } = useDiary();
@@ -1966,26 +2144,7 @@ function WeekView({ year, month, day }) {
                 {anniversary && <span style={{ fontSize: 10, color: 'var(--month-note-text)' }}>·</span>}
               </div>
               <div className="week-day-entries">
-                {dayEntries.length > 0 ? dayEntries.map(entry => {
-                  const author = settings.authors.find(a => a.id === entry.author);
-                  return (
-                    <div key={entry.id} className="week-entry-card" style={{
-                      background: `${author?.color}0a`, borderLeft: `3px solid ${author?.color}`,
-                    }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 4 }}>
-                        <span style={{ width: 5, height: 5, borderRadius: '50%', background: author?.color }}/>
-                        <span style={{ fontSize: 10, color: author?.color, fontWeight: 600 }}>{author?.name}</span>
-                      </div>
-                      <div style={{
-                        fontSize: 12, lineHeight: 1.5, color: 'var(--text-1)',
-                        overflow: 'hidden', textOverflow: 'ellipsis',
-                        display: '-webkit-box', WebkitLineClamp: 4, WebkitBoxOrient: 'vertical',
-                      }}>{stripHtml(entry.content)}</div>
-                    </div>
-                  );
-                }) : (
-                  <div style={{ fontSize: 11, color: 'var(--text-3)', textAlign: 'center', padding: '12px 4px' }}>—</div>
-                )}
+                <WeekDayEntries dayEntries={dayEntries} settings={settings}/>
               </div>
             </div>
           );
@@ -2016,8 +2175,7 @@ function WeekView({ year, month, day }) {
   );
 }
 
-Object.assign(window, { WeekView });
-
+Object.assign(window, { WeekView, WeekDayEntries });
 
 /* ===== diary/year-view.jsx ===== */
 // ═══ Year View ═══
